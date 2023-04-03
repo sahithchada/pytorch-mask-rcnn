@@ -23,8 +23,15 @@ from torch.autograd import Variable
 
 import utils
 import visualize
-from nms.nms_wrapper import nms
-from roialign.roi_align.crop_and_resize import CropAndResizeFunction
+from torchvision.ops import nms   
+#from torchvision.ops.nms import nms
+#from nms.nms_wrapper import nms
+#from roialign.roi_align.crop_and_resize import CropAndResizeFunction
+from torchvision.ops import RoIAlign
+
+import skimage.io
+import matplotlib.pyplot as plt
+import cv2
 
 
 ############################################################
@@ -131,7 +138,7 @@ class TopDownLayer(nn.Module):
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1)
 
     def forward(self, x, y):
-        y = F.upsample(y, scale_factor=2)
+        y = F.interpolate(y, scale_factor=2)
         x = self.conv1(x)
         return self.conv2(self.padding2(x+y))
 
@@ -176,9 +183,9 @@ class FPN(nn.Module):
         c4_out = x
         x = self.C5(x)
         p5_out = self.P5_conv1(x)
-        p4_out = self.P4_conv1(c4_out) + F.upsample(p5_out, scale_factor=2)
-        p3_out = self.P3_conv1(c3_out) + F.upsample(p4_out, scale_factor=2)
-        p2_out = self.P2_conv1(c2_out) + F.upsample(p3_out, scale_factor=2)
+        p4_out = self.P4_conv1(c4_out) + F.interpolate(p5_out, scale_factor=2)
+        p3_out = self.P3_conv1(c3_out) + F.interpolate(p4_out, scale_factor=2)
+        p2_out = self.P2_conv1(c2_out) + F.interpolate(p3_out, scale_factor=2)
 
         p5_out = self.P5_conv2(p5_out)
         p4_out = self.P4_conv2(p4_out)
@@ -380,7 +387,8 @@ def proposal_layer(inputs, proposal_count, nms_threshold, anchors, config=None):
     # for small objects, so we're skipping it.
 
     # Non-max suppression
-    keep = nms(torch.cat((boxes, scores.unsqueeze(1)), 1).data, nms_threshold)
+    keep = nms(boxes,scores, nms_threshold)
+    #keep = nms(torch.cat((boxes, scores.unsqueeze(1)), 1).data, nms_threshold)
     keep = keep[:proposal_count]
     boxes = boxes[keep, :]
 
@@ -425,10 +433,10 @@ def pyramid_roi_align(inputs, pool_size, image_shape):
 
     # Crop boxes [batch, num_boxes, (y1, x1, y2, x2)] in normalized coords
     boxes = inputs[0]
-
     # Feature Maps. List of feature maps from different level of the
     # feature pyramid. Each is [batch, height, width, channels]
     feature_maps = inputs[1:]
+    #print(feature_maps[3].shape)
 
     # Assign each ROI to a level in the pyramid based on the ROI area.
     y1, x1, y2, x2 = boxes.chunk(4, dim=1)
@@ -472,10 +480,25 @@ def pyramid_roi_align(inputs, pool_size, image_shape):
         # which is how it's done in tf.crop_and_resize()
         # Result: [batch * num_boxes, pool_height, pool_width, channels]
         ind = Variable(torch.zeros(level_boxes.size()[0]),requires_grad=False).int()
+        level_boxes = level_boxes[:, [1, 0, 3, 2]]
+        n,h,w=feature_maps[i].shape
+        level_boxes[:,[0, 2]]*= image_shape[0]
+        level_boxes[:,[1,3]]*=image_shape[1]
+        indexes = torch.zeros(level_boxes.shape[0], 1)
+        level_boxes = torch.cat((indexes, level_boxes), dim=1)
         if level_boxes.is_cuda:
             ind = ind.cuda()
-        feature_maps[i] = feature_maps[i].unsqueeze(0)  #CropAndResizeFunction needs batch dimension
-        pooled_features = CropAndResizeFunction(pool_size, pool_size, 0)(feature_maps[i], level_boxes, ind)
+        #feature_maps[i] = feature_maps[i].unsqueeze(0)  #CropAndResizeFunction needs batch dimension
+        #pooled_features = CropAndResizeFunction(pool_size, pool_size, 0)(feature_maps[i], level_boxes, ind)
+
+
+        feature_maps_reshaped = torch.reshape(feature_maps[i], (1,n, h,w))
+
+
+        roi_align1 = RoIAlign((pool_size, pool_size), spatial_scale=feature_maps[i].shape[1]/image_shape[0],sampling_ratio=-1)
+
+
+        pooled_features=roi_align1(feature_maps_reshaped,level_boxes)
         pooled.append(pooled_features)
 
     # Pack pooled features into one tensor
@@ -743,7 +766,8 @@ def refine_detections(rois, probs, deltas, window, config):
 
     Returns detections shaped: [N, (y1, x1, y2, x2, class_id, score)]
     """
-
+    #window edit
+    #window = np.array([0, 0, 1024, 1024]).astype(np.float32)
     # Class IDs per ROI
     _, class_ids = torch.max(probs, dim=1)
 
@@ -799,8 +823,10 @@ def refine_detections(rois, probs, deltas, window, config):
         ix_scores = pre_nms_scores[ixs]
         ix_scores, order = ix_scores.sort(descending=True)
         ix_rois = ix_rois[order.data,:]
-
-        class_keep = nms(torch.cat((ix_rois, ix_scores.unsqueeze(1)), dim=1).data, config.DETECTION_NMS_THRESHOLD)
+        #keep = nms(boxes,scores, nms_threshold)
+        #keep = nms(torch.cat((boxes, scores.unsqueeze(1)), 1).data, nms_threshold)
+        class_keep=nms(ix_rois,ix_scores,config.DETECTION_NMS_THRESHOLD)
+        #class_keep = nms(torch.cat((ix_rois, ix_scores.unsqueeze(1)), dim=1).data, config.DETECTION_NMS_THRESHOLD)
 
         # Map indicies
         class_keep = keep[ixs[order[class_keep].data].data]
@@ -1471,7 +1497,8 @@ class MaskRCNN(nn.Module):
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.xavier_uniform(m.weight)
+                #nn.init.xavier_uniform(m.weight)
+                nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     m.bias.data.zero_()
             elif isinstance(m, nn.BatchNorm2d):
@@ -1592,7 +1619,7 @@ class MaskRCNN(nn.Module):
             molded_images = molded_images.cuda()
 
         # Wrap in variable
-        molded_images = Variable(molded_images, volatile=True)
+        #molded_images = Variable(molded_images, volatile=True)
 
         # Run object detection
         detections, mrcnn_mask = self.predict([molded_images, image_metas], mode='inference')
@@ -1681,6 +1708,27 @@ class MaskRCNN(nn.Module):
                 scale = scale.cuda()
             detection_boxes = detections[:, :4] / scale
 
+
+            '''
+            
+            print(torch.max(detections[:, :4]))
+            ROOT_DIR = os.getcwd()
+            IMAGE_DIR = os.path.join(ROOT_DIR, "images")
+            file_names = next(os.walk(IMAGE_DIR))[2]
+            #image = skimage.io.imread(os.path.join(IMAGE_DIR, random.choice(file_names)))
+            image = skimage.io.imread(os.path.join(IMAGE_DIR, file_names[1]))
+            for i in range(detections.shape[0]):
+                h1,w1=image.shape[:2]
+                scale1 = Variable(torch.from_numpy(np.array([h1, w1-20, h1, w1])).float(), requires_grad=False)
+                detections[i,[1,3]]=detections[i, [1,3]]-110
+                #testmask=detections[i,[1,3]]
+                #image=visualize.draw_box(image,testmask.int(), [220,220,0])
+                image = cv2.resize(image, dsize=(1024, 1024), interpolation=cv2.INTER_CUBIC)
+                image=visualize.draw_box(image,detections[i,:4].int(), [220,220,0])
+                print(image.shape)
+            imgplot = plt.imshow(image)
+            plt.savefig("test.png")
+            '''
             # Add back batch dimension
             detection_boxes = detection_boxes.unsqueeze(0)
 

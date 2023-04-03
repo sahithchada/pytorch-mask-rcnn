@@ -33,7 +33,7 @@ class InferenceConfig(coco.CocoConfig):
     # Set batch size to 1 since we'll be running inference on
     # one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
     # GPU_COUNT = 0 for CPU
-    GPU_COUNT = 1
+    GPU_COUNT = 0
     IMAGES_PER_GPU = 1
 
 config = InferenceConfig()
@@ -68,7 +68,9 @@ class_names = ['BG', 'person', 'bicycle', 'car', 'motorcycle', 'airplane',
 
 # Load a random image from the images folder
 file_names = next(os.walk(IMAGE_DIR))[2]
-image = skimage.io.imread(os.path.join(IMAGE_DIR, random.choice(file_names)))
+#image = skimage.io.imread(os.path.join(IMAGE_DIR, random.choice(file_names)))
+image = skimage.io.imread(os.path.join(IMAGE_DIR, file_names[1]))
+
 
 # Run detection
 results = model.detect([image])
@@ -77,4 +79,5 @@ results = model.detect([image])
 r = results[0]
 visualize.display_instances(image, r['rois'], r['masks'], r['class_ids'],
                             class_names, r['scores'])
-plt.show()
+plt.savefig("output.png")
+#plt.show()

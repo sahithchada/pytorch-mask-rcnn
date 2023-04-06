@@ -74,6 +74,7 @@ class CocoConfig(Config):
     # Give the configuration a recognizable name
     NAME = "coco"
 
+    GPU_COUNT = 0
     # We use one GPU with 8GB memory, which can fit one image.
     # Adjust down if you use a smaller GPU.
     IMAGES_PER_GPU = 16

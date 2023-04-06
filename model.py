@@ -588,7 +588,7 @@ def detection_target_layer(proposals, gt_class_ids, gt_boxes, gt_masks, config):
     # Handle COCO crowds
     # A crowd box in COCO is a bounding box around several instances. Exclude
     # them from training. A crowd box is given a negative class ID.
-    if torch.nonzero(gt_class_ids < 0).size():
+    if torch.nonzero(gt_class_ids < 0).size()[0]:
         crowd_ix = torch.nonzero(gt_class_ids < 0)[:, 0]
         non_crowd_ix = torch.nonzero(gt_class_ids > 0)[:, 0]
         crowd_boxes = gt_boxes[crowd_ix.data, :]
@@ -663,8 +663,23 @@ def detection_target_layer(proposals, gt_class_ids, gt_boxes, gt_masks, config):
         box_ids = Variable(torch.arange(roi_masks.size()[0]), requires_grad=False).int()
         if config.GPU_COUNT:
             box_ids = box_ids.cuda()
-        masks = Variable(CropAndResizeFunction(config.MASK_SHAPE[0], config.MASK_SHAPE[1], 0)(roi_masks.unsqueeze(1), boxes, box_ids).data, requires_grad=False)
-        masks = masks.squeeze(1)
+        #feature_maps[i] = feature_maps[i].unsqueeze(0)  #CropAndResizeFunction needs batch dimension
+        #pooled_features = CropAndResizeFunction(pool_size, pool_size, 0)(feature_maps[i], level_boxes, ind)
+
+        level_boxes = boxes[:, [1, 0, 3, 2]].clone()
+        indexes = torch.zeros(level_boxes.shape[0], 1)
+        level_boxes = torch.cat((indexes, level_boxes), dim=1)
+        n,h,w=roi_masks.shape
+        feature_maps_reshaped = torch.reshape(roi_masks.unsqueeze(1), (1,n, h,w))
+
+
+        roi_align1 = RoIAlign((config.MASK_SHAPE[0], config.MASK_SHAPE[1]), spatial_scale=h,sampling_ratio=-1)
+
+        masks=roi_align1(feature_maps_reshaped,level_boxes)
+        
+        #masks = Variable(CropAndResizeFunction(config.MASK_SHAPE[0], config.MASK_SHAPE[1], 0)(roi_masks.unsqueeze(1), boxes, box_ids).data, requires_grad=False)
+        #masks = masks.squeeze(1)
+        masks=torch.reshape(masks,(-1,masks.shape[2],masks.shape[3]))
 
         # Threshold mask pixels at 0.5 to have GT masks be 0 or 1 to use with
         # binary cross entropy loss.
@@ -1836,7 +1851,7 @@ class MaskRCNN(nn.Module):
 
         for epoch in range(self.epoch+1, epochs+1):
             log("Epoch {}/{}.".format(epoch,epochs))
-
+            torch.autograd.set_detect_anomaly(True)
             # Training
             loss, loss_rpn_class, loss_rpn_bbox, loss_mrcnn_class, loss_mrcnn_bbox, loss_mrcnn_mask = self.train_epoch(train_generator, optimizer, self.config.STEPS_PER_EPOCH)
 
@@ -1906,6 +1921,7 @@ class MaskRCNN(nn.Module):
             rpn_class_loss, rpn_bbox_loss, mrcnn_class_loss, mrcnn_bbox_loss, mrcnn_mask_loss = compute_losses(rpn_match, rpn_bbox, rpn_class_logits, rpn_pred_bbox, target_class_ids, mrcnn_class_logits, target_deltas, mrcnn_bbox, target_mask, mrcnn_mask)
             loss = rpn_class_loss + rpn_bbox_loss + mrcnn_class_loss + mrcnn_bbox_loss + mrcnn_mask_loss
 
+            
             # Backpropagation
             loss.backward()
             torch.nn.utils.clip_grad_norm(self.parameters(), 5.0)

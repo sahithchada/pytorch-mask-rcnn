@@ -312,16 +312,17 @@ def apply_box_deltas(boxes, deltas):
     center_y = boxes[:, 0] + 0.5 * height
     center_x = boxes[:, 1] + 0.5 * width
     # Apply deltas
-    center_y += deltas[:, 0] * height
-    center_x += deltas[:, 1] * width
-    height *= torch.exp(deltas[:, 2])
-    width *= torch.exp(deltas[:, 3])
+    center_y = center_y.clone() + deltas[:, 0] * height.clone()
+    center_x = center_x.clone() + deltas[:, 1] * width.clone()
+    height = height.clone() * torch.exp(deltas[:, 2])
+    width = width.clone() * torch.exp(deltas[:, 3])
     # Convert back to y1, x1, y2, x2
     y1 = center_y - 0.5 * height
     x1 = center_x - 0.5 * width
     y2 = y1 + height
     x2 = x1 + width
     result = torch.stack([y1, x1, y2, x2], dim=1)
+    
     return result
 
 def clip_boxes(boxes, window):
@@ -1933,17 +1934,17 @@ class MaskRCNN(nn.Module):
             # Progress
             printProgressBar(step + 1, steps, prefix="\t{}/{}".format(step + 1, steps),
                              suffix="Complete - loss: {:.5f} - rpn_class_loss: {:.5f} - rpn_bbox_loss: {:.5f} - mrcnn_class_loss: {:.5f} - mrcnn_bbox_loss: {:.5f} - mrcnn_mask_loss: {:.5f}".format(
-                                 loss.data.cpu()[0], rpn_class_loss.data.cpu()[0], rpn_bbox_loss.data.cpu()[0],
-                                 mrcnn_class_loss.data.cpu()[0], mrcnn_bbox_loss.data.cpu()[0],
-                                 mrcnn_mask_loss.data.cpu()[0]), length=10)
+                                 loss.item(), rpn_class_loss.item(), rpn_bbox_loss.item(),
+                                 mrcnn_class_loss.item(), mrcnn_bbox_loss.item(),
+                                 mrcnn_mask_loss.item()), length=10)
 
             # Statistics
-            loss_sum += loss.data.cpu()[0]/steps
-            loss_rpn_class_sum += rpn_class_loss.data.cpu()[0]/steps
-            loss_rpn_bbox_sum += rpn_bbox_loss.data.cpu()[0]/steps
-            loss_mrcnn_class_sum += mrcnn_class_loss.data.cpu()[0]/steps
-            loss_mrcnn_bbox_sum += mrcnn_bbox_loss.data.cpu()[0]/steps
-            loss_mrcnn_mask_sum += mrcnn_mask_loss.data.cpu()[0]/steps
+            loss_sum += loss.item()/steps
+            loss_rpn_class_sum += rpn_class_loss.item()/steps
+            loss_rpn_bbox_sum += rpn_bbox_loss.item()/steps
+            loss_mrcnn_class_sum += mrcnn_class_loss.item()/steps
+            loss_mrcnn_bbox_sum += mrcnn_bbox_loss.item()/steps
+            loss_mrcnn_mask_sum += mrcnn_mask_loss.item()/steps
 
             # Break after 'steps' steps
             if step==steps-1:
